@@ -1,0 +1,210 @@
+---
+title: "Practical Machine Learning Assignment"
+author: "Bassey Orok"
+date: "22 April 2016"
+output: pdf_document
+---
+
+
+```{r, echo=TRUE, cache=TRUE}
+
+setwd("~/Desktop/Coursera_wd")
+library(knitr)
+
+```
+
+
+#load useful libraries
+```{r,message=FALSE}
+
+library(caret)
+library(rpart)
+library(RColorBrewer)
+library(knitr)
+library(tree)
+library(rattle)
+library(randomForest)
+
+```
+### Downloading the data
+```{r, echo=TRUE, cache=TRUE}
+fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+download.file(fileUrl, destfile = "./pmlData/pml-training.csv", method="curl")
+
+fileUrl2 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(fileUrl, destfile = "./pmlData/pml-testing.csv", method="curl")
+```
+
+###question to answer
+You should create a report describing how you built your model,
+how you used cross validation,
+what you think the expected out of sample error is,
+and why you made the choices you did.
+
+### Load the requied package/library
+```{r,echo=TRUE,cache=TRUE,warning=FALSE,message=FALSE}
+library(caret)
+```
+### Retrieve downloaded data and assign to variables
+```{r, echo=TRUE, cache=TRUE}
+set.seed(1234)
+trainingDat = read.csv("pmlData/pml-training.csv", na.strings=c("", "NA", "NULL"))
+
+
+testingDat = read.csv("pmlData/pml-testing.csv", na.strings=c("", "NA", "NULL"))
+```
+### Check dimensions of the data
+```{r,echo=TRUE, cache=TRUE}
+dim(trainingDat)
+dim(testingDat)
+```
+### Some house keeping to clean the data inorder to reduce the number of predictors
+```{r,echo=TRUE, cache=TRUE}
+training.redu <- trainingDat[ , colSums(is.na(trainingDat)) == 0]
+dim(training.redu)
+
+```
+### Remove unwanted variables
+```{r}
+remove = c('X', 'user_name', 'raw_timestamp_part_1', 'raw_timestamp_part_2', 'cvtd_timestamp', 'new_window', 'num_window')
+training.redu <- training.redu[, -which(names(training.redu) %in% remove)]
+
+dim(training.redu)
+
+```
+
+```{r, echo=TRUE,cache=TRUE}
+# only numeric variables can be evaluated in this way.
+
+zeroVar= nearZeroVar(training.redu[sapply(training.redu, is.numeric)], saveMetrics = TRUE)
+training.nonzerovar = training.redu[,zeroVar[, 'nzv']==0]
+dim(training.nonzerovar)
+```
+* Remove about 90% of highly correlated variables
+```{r}
+# only numeric variabls can be evaluated in this way.
+corrMatrix <- cor(na.omit(training.nonzerovar[sapply(training.nonzerovar, is.numeric)]))
+dim(corrMatrix)
+```
+```{r,echo=TRUE,cache=TRUE}
+corrDF <- expand.grid(row = 1:52, col = 1:52)
+corrDF$correlation <- as.vector(corrMatrix)
+levelplot(correlation ~ row + col, corrDF)
+
+```
+### We are going to remove those variables which have high correlation
+```{r,echo=TRUE,cache=TRUE}
+removecor = findCorrelation(corrMatrix, cutoff = .90, verbose = TRUE)
+```
+
+```{r,echo=TRUE,cache=TRUE}
+training.nocor = training.nonzerovar[,-removecor]
+dim(training.nocor)
+```
+### Conduct cross validation by splitting the training.nocor data into training and testing data sets
+```{r,echo=TRUE,cache=TRUE}
+inTrain <- createDataPartition(y=training.nocor$classe, p=0.7, list=FALSE)
+training <- training.nocor[inTrain,] 
+testing <- training.nocor[-inTrain,]
+dim(training)
+dim(testing)
+```
+
+# Data Analysis and Predictions
+```{r, echo=TRUE,cache=TRUE}
+
+set.seed(3334)
+tree_training <- tree(classe ~., data = training)
+summary(tree_training)
+```
+
+```{r, echo=TRUE,cache=TRUE}
+
+plot(tree_training)
+text(tree_training,pretty= 0, cex = .6)
+```
+
+### The text is somewhat squashed together with th etree having so many brnches so we make a prettier tree by prunning it with 
+
+```{r,echo=TRUE,cache=TRUE}
+set.seed(12345)
+modFit <- train(classe ~ ., data=training, method="rpart")
+fancyRpartPlot(modFit$finalModel)
+
+```
+
+### To check the performance of the tree we have to do some cross validation on the testing data
+
+```{r,echo=TRUE,cache=TRUE}
+
+tree_pred<-predict(tree_training,testing,type="class")
+predMatrix<-with(testing,table(tree_pred,classe))
+sum(diag(predMatrix))/sum(as.vector(predMatrix)) # this is the error rate
+```
+
+
+```{r,echo=TRUE,cache=TRUE}
+tree_pred<-predict(modFit ,testing)
+predMatrix<-with(testing,table(tree_pred,classe))
+sum(diag(predMatrix))/sum(as.vector(predMatrix)) # this is the error rate
+```
+
+```{r, echo=TRUE,cache=TRUE}
+training_cv <-cv.tree(tree_training,FUN=prune.misclass)
+
+training_cv
+```
+
+```{r,echo=TRUE,cache=TRUE}
+
+plot(training_cv)
+```
+
+
+### To get a simplere result and a more interprtable tree we have to prune the tree.
+```{r,echo=TRUE,cache=TRUE}
+prune.training<- prune.misclass(tree_training,best=18)
+
+```
+
+```{r,echo=TRUE,cache=TRUE}
+tree_pred<-predict(prune.training,testing,type="class")
+predMatrix <- with(testing,table(tree_pred,classe))
+sum(diag(predMatrix))/sum(as.vector(predMatrix)) # error rate
+
+```
+
+Prunning the tree didn't give any marked difference in the results. 
+
+To improve on accuracy we would employ another method
+
+## Random Forest
+
+```{r,echo=TRUE,cache=TRUE}
+set.seed(14567)
+# we fit a model to the random forest
+rf_training <- randomForest(classe~.,data=training,ntree=100, importance=TRUE)
+rf_training
+```
+
+This gives and error rate of 0.63%
+
+We will now test of thE out of Sample Accuracy
+
+#Out of Sample Accuracy
+
+```{r,echo=TRUE,cache=TRUE}
+tree.pred=predict(rf_training,testing,type="class")
+predMatrix = with(testing,table(tree.pred,classe))
+sum(diag(predMatrix))/sum(as.vector(predMatrix)) # error rate
+
+```
+0.995 implies that our estimate is accurate.
+
+To conclude we will now predict using the testing data from the Coursera Assignment.
+
+```{r,echo=TRUE,cache=TRUE}
+ans <- predict(rf_training, testingDat)
+
+ans
+```
